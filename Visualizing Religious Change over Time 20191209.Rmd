@@ -1,0 +1,429 @@
+---
+title: "Visualizing Change in Ordinal Meausures: Religious Attendance in the United States (1972-2018)"
+author: "Michael Lee Wood"
+date: "21 November 2019"
+output:
+  pdf_document: 
+    keep_tex: yes
+  html_document:
+    code_folding: show
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+
+```{r, echo=F}
+knitr::opts_chunk$set(fig.width=12, fig.height=8)
+```
+
+This file contains instructions and code to prepare the gss data and create the plot.
+
+# Preliminary Steps and Cleaning
+
+If you haven’t already, first download the GSS data from the NORC website. An extract is available here: https://gssdataexplorer.norc.org/projects/62946/extracts/45347?token=UxRsTrX6sjsAaDwx9oxf.
+```{r, eval=F}
+setwd("working_directory_here")
+```
+
+Load the following packages:
+```{r}
+pacman::p_load(ggplot2, tidyr, readxl, dplyr, reshape2)
+```
+
+Read in the “GSS.xls” file and store it as a dataframe. (Note: this has all years, but only a few variables). There will be a couple warnings, which you can ignore.
+```{r, warning=F}
+gss18 <- readxl::read_xls("GSS.xls")
+```
+
+Rename columns and drop columns we don't need. I also create a subset with the gender variable for an extra example at the end.
+```{r}
+names(gss18)[1] <- "year"
+names(gss18)[3] <- "attend"
+names(gss18)[5] <- "gender"
+gss18gender <- gss18[,c(1,5)]
+gss18 <- gss18[,c(1,3)]
+```
+
+Convert the attendance variable to a factor (it is currently a string)
+```{r}
+gss18$attend   <- as.factor(gss18$attend)
+```
+
+Remove "DK" and "NA" responses from the attendance variable
+```{r}
+gss18<-gss18[!(gss18$attend=='Dk,na'),]
+gss18$attend <- droplevels(gss18$attend)
+```
+
+Remove two rows with NA in the year
+```{r}
+gss18<-gss18[!(is.na(gss18$year)==TRUE),] 
+```
+
+Check the factor levels for the attendance variable
+```{r}
+levels(gss18$attend)
+```
+
+We need to reorder the levels of the attendance variable so they appear in the correct order in the plot. As
+you can see, they are currently arranged alphabetically!
+```{r}
+gss18$attend <- factor(gss18$attend,levels(gss18$attend)[c(5,3,8,9,7,1,6,2,4)])
+```
+
+Check the new level order
+```{r}
+levels(gss18$attend)
+```
+
+# Preparing for the Plot
+To create the visualization we need a dataframe that gives the proportion of responses for each repsonse category by year. This is done in two steps. First, we reshape the data from wide to long and tally up the responses. Then we go back to wide format, giving each response category its own column with a sum.
+
+Inspect our current dataframe
+```{r}
+head(gss18)
+```
+
+Create an ID variable preparatory to reshaping the data. We didn't use the GSS ID variable because those numbers often repeat, and we need every case to have a unique ID. 
+```{r}
+gss18$id <- rownames(gss18)
+```
+
+Reshape from wide to long and tally. The new dataframe will show how many cases there are in each attendance response category by year.
+```{r}
+gss18_l <- gss18 %>%
+  group_by(year, attend) %>%
+  tally()
+```
+
+Inspect the new dataframe
+```{r}
+head(gss18_l)
+```
+
+Reshape the dataframe again, creating a column for each factor level of the attend variable
+```{r, message=F}
+gss18_attend <- dcast(gss18_l,year~attend)
+```
+
+Inspect our new dataframe
+```{r}
+head(gss18_attend)
+```
+
+We now have our data in the right general format, but we need to make a few other changes before creating the plot. First, we need to convert our raw counts to percentages. We begin by getting the total number of cases for each year.
+```{r}
+gss18_attend$tot <- rowSums(gss18_attend[,c(2:10)])
+```
+
+Now divide each cell by the total, and multiply by 100
+```{r}
+gss18_attend[,-1] <- lapply(gss18_attend[,-1], function(x){(x/gss18_attend$tot)*100})
+```
+
+We don't need the "total" column anymore, so we can drop it
+```{r}
+gss18_attend <- gss18_attend[,-11]
+```
+
+Reinspect the dataframe (always a good practice!)
+```{r}
+head(gss18_attend)
+```
+
+Next, we need to split our data into "high" and "low" categories, but we can't do that without first splitting our middle category, which here is "Once a month." When it comes to interpretation, this means that "Once a month" is a neutral category, because for each year, half of "Once a month" will appear on the "low" side of the plot, and half will appear on the "high" side. 
+
+```{r}
+gss18_attend$`OnceMonthLo` <- gss18_attend$`Once a month`/2
+gss18_attend$`OnceMonthHi` <- gss18_attend$`OnceMonthLo`
+gss18_attend <- gss18_attend[,-6]
+gss18_attend <- gss18_attend[,c(1:5,10:11,6:9)]
+```
+
+Reinspect the dataframe
+```{r}
+head(gss18_attend)
+```
+
+
+Next we need to get our colors ready. This is a bit of work because we need three palettes: one for the "high" bars, one for the "low" bars, and one for the legend. I chose a color palette from the Urban Institute's Data Visualization Style Guide https://urbaninstitute.github.io/graphics-styleguide/ First we create an object that stores the colors for the low bars
+```{r}
+pal_lo <- c("#0a4c6a","#1696d2","#73bfe2","#cfe8f3","#f5f5f5")
+```
+
+Now the high bars
+```{r}
+pal_hi <- c("#f5f5f5","#fff2cf", "#fdd870", "#fdaa11", "#ca5800")
+```
+
+Create the palette for the legend
+```{r}
+legend.pal <- c("#ca5800","#fdaa11","#fdd870","#fff2cf",
+                "#f5f5f5","#cfe8f3","#73bfe2","#1696d2", "#0a4c6a")
+```
+
+Now we need to create two separate dataframes so we can plot the high and low bars separately. First, we'll create a dataframe that goes from "never" to "once a month-lo"
+```{r}
+gss_att_lo <- gss18_attend[,1:6]
+```
+Next we'll reshape wide to long
+```{r}
+gss_att_lo <- melt(gss_att_lo,id="year")
+```
+Make the values negative, so that they get plotted on the left side of the graph
+```{r}
+gss_att_lo$value <- -gss_att_lo$value
+```
+
+Now we'll use that vector of colors to assign a color to each category. We do this by creating a separating color column
+```{r}
+gss_att_lo$col <- rep(pal_lo,each=(160/5))
+```
+Change these to color values to factors and make sure they are in the right order
+```{r}
+gss_att_lo$col <- factor(gss_att_lo$col, 
+                         levels = c("#0a4c6a","#1696d2","#73bfe2","#cfe8f3","#f5f5f5"))
+```
+
+Inspect the dataframe
+```{r}
+head(gss_att_lo)
+```
+
+Now we do that again, but for the "high" plot
+```{r}
+gss_att_hi <- gss18_attend[,c(1,7:11)]
+gss_att_hi <- melt(gss_att_hi,id="year")
+#We need to reverse the levels here so they are plotted in the right order
+gss_att_hi$variable <- factor(gss_att_hi$variable,
+                              levels(gss_att_hi$variable)[c(5,4,3,2,1)])
+gss_att_hi$col <- rep(pal_hi,each=(160/5))
+gss_att_hi$col <- factor(gss_att_hi$col,
+                         levels = c("#ca5800","#fdaa11","#fdd870","#fff2cf","#f5f5f5"))
+```
+
+Our data and colors are ready. Now we need to finish preparing the legend by specifying all the labels
+```{r}
+mylevels <- c("More than once a week","Every week","Nearly every week",
+              "2-3x a month","Once a month","Several times a year",
+              "Once a year","Less than once a year","Never")
+```
+
+If we create the plot as is, the values on the left will appear as negative numbers ranging from 0% to -50%. However, we can create the following function which will allow us to make both sides of the axis range from 0% to 50%. We will call this function when we create the actual plot.
+
+```{r}
+abs_percent <- function(x,digits=2)
+{paste0(round(abs(x),digits), "%")}
+```
+
+
+# Creating the Plot
+
+We're finally ready to create the plot. Here are the steps:
+
+1.  Create two geom_bars using the "high" and "low" dataframes. I made the width slightly below one so the bars are wide, but don't touch
+2.  Add a line at 0. Technically this is a horizontal line, but we are going to flip the x and y axis, so it will appear vertical.
+3.  Add the legend, specifying our custom text and color palette.
+4.  Change the theme to "classic"
+6.  Customize the x axis so it shows each year
+7.  Specify the break points for the y axis
+8.  Add lines that mark 50% on the y axis. This tells us whether a year has more people on the high or low end 
+9.  Flip the x and y axes
+10. Add title, caption, and axis labels
+11. Remove the legend title, adjust a label position, and specify text sizes
+
+```{r}
+p <- 
+  ggplot() +  
+  geom_bar(data = gss_att_lo, aes(x=year, y=value,fill=col),
+           position="stack", stat="identity",width=.93)+ 
+  geom_bar(data = gss_att_hi, aes(x=year, y=value,fill=col),
+           position="stack", stat="identity",width=.93)+
+  geom_hline(yintercept = 0, color =c("white"))+
+  scale_fill_identity(labels = mylevels, breaks=legend.pal, guide="legend")+
+  theme_classic()+
+  scale_x_continuous(breaks=c(1972:1978,1980,1982:1991,1993,seq(1994,2018,2)))+
+  scale_y_continuous(breaks=seq(-50,50,10),
+                     labels=abs_percent)+
+  geom_hline(yintercept=c(-50,50),linetype="dashed",color="grey")+
+  coord_flip()+
+  labs(title = "How often do you attend religious services?",
+       caption = "General Social Survey 1972-2018",
+       y = "",
+       x = "Year")+
+  theme(legend.title = element_blank())+
+  theme(axis.title.x = element_text(hjust=.54))+
+  theme(plot.title=element_text(size=20),
+        plot.caption=element_text(size=10),
+        axis.title.y=element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x=element_text(size=10),
+        legend.text=element_text(size=10))
+```
+
+That's it!
+
+```{r p, echo=FALSE}
+plot(p)
+```
+
+
+# Adding annotations with the category values. 
+Though not featured in the plot above, we can also add annotations that show the values for each of the categories. This can make comparing values a bit easier, but it can also make the plot more cluttered if there are categories with very small values. I explain how to do this here for your reference.  
+
+To annotate the plot with the values for each category, we need to calculate WHERE each label should appear. To get these labels near the center of each category, add up the values of the preceding categories and then add 1/2 of the value of the category we are working on. These will be the "y" locations of our annotations We don't need to do this for the middle category, because we already know that the text should be at 0. The following code makes these calculations and stores them in a new dataframe.
+```{r}
+labeldf <- gss18_attend
+labeldf <- labeldf[,-6]
+labeldf[,2] <- -(((labeldf[,2])/2)+rowSums(labeldf[,3:6]))
+labeldf[,3] <- -(((labeldf[,3])/2)+rowSums(labeldf[,4:6]))
+labeldf[,4] <- -(((labeldf[,4])/2)+rowSums(labeldf[,5:6]))
+labeldf[,5] <- -(((labeldf[,5])/2)+labeldf[,6])
+
+labeldf[,10] <- ((labeldf[,10])/2)+rowSums(labeldf[,6:9])
+labeldf[,9] <- ((labeldf[,9])/2)+rowSums(labeldf[,6:8])
+labeldf[,8] <- ((labeldf[,8])/2)+rowSums(labeldf[,6:7])
+labeldf[,7] <- ((labeldf[,7])/2)+labeldf[,6]
+```
+
+Now we can add a series of "annotate" commands to add the values to the plot. in these commands, the x location is the year, the y location is the location computed in the above code (recall that our coordinates are flipped), and the value comes from gss18 dataframe. I round the percentages at two decimal points and add "hjust=.5" to center the text properly. I also change the color two white for the most extreme categories to make them more readable on the darker bars. 
+
+```{r}
+p_annotated <- 
+  ggplot() +  
+  geom_bar(data = gss_att_lo, aes(x=year, y=value,fill=col),
+           position="stack", stat="identity",width=.93)+ 
+  geom_bar(data = gss_att_hi, aes(x=year, y=value,fill=col),
+           position="stack", stat="identity",width=.93)+
+  geom_hline(yintercept = 0, color =c("white"))+
+  scale_fill_identity(labels = mylevels, breaks=legend.pal, guide="legend")+
+  theme_classic()+
+  annotate("text", x = labeldf$year,y = 0,label = round((2*labeldf$OnceMonthHi),1))+
+  annotate("text", x = labeldf$year, y = labeldf$Never, hjust = .5, 
+           label = round(gss18_attend$Never,1), color = "#f5f5f5") +
+  annotate("text", x = labeldf$year, y = labeldf$`Lt once a year`, hjust = .5, 
+           label = round(gss18_attend$`Lt once a year`,1))+
+  annotate("text", x = labeldf$year, y = labeldf$`Once a year`, hjust = .5, 
+           label = round(gss18_attend$`Once a year`,1))+
+  annotate("text", x = labeldf$year, y = labeldf$`Sevrl times a yr`, hjust = .5, 
+           label = round(gss18_attend$`Sevrl times a yr`,1))+
+  annotate("text", x = labeldf$year, y = labeldf$`2-3x a month`, hjust = .5, 
+           label = round(gss18_attend$`2-3x a month`,1))+
+  annotate("text", x = labeldf$year, y = labeldf$`Nrly every week`, hjust = .5, 
+           label = round(gss18_attend$`Nrly every week`,1))+
+  annotate("text", x = labeldf$year, y = labeldf$`Every week`, hjust = .5, 
+           label = round(gss18_attend$`Every week`,1))+
+  annotate("text", x = labeldf$year, y = labeldf$`More thn once wk`, hjust = .5, 
+           label = round(gss18_attend$`More thn once wk`,1), color="#f5f5f5")+
+  scale_x_continuous(breaks=c(1972:1978,1980,1982:1991,1993,seq(1994,2018,2)))+
+  scale_y_continuous(breaks=seq(-50,50,10),
+                     labels=abs_percent)+
+  geom_hline(yintercept=c(-50,50),linetype="dashed",color="grey")+
+  coord_flip()+
+  labs(title = "How often do you attend religious services?",
+       caption = "General Social Survey 1972-2018",
+       y = "",
+       x = "Year")+
+  theme(legend.title = element_blank())+
+  theme(axis.title.x = element_text(hjust=.54))+
+  theme(plot.title=element_text(size=20),
+        plot.caption=element_text(size=10),
+        axis.title.y=element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x=element_text(size=10),
+        legend.text=element_text(size=10))
+```
+
+That's it!
+
+```{r p_annotated, echo=FALSE}
+plot(p_annotated)
+```
+
+
+
+
+# Making the plot for variables with an even number of categories
+The above examples assume a variable with an odd number of categories, but we can create these plots for variables with even numbers of categories too. For simplicity's sake, I show how this can be done using the GSS's gender variable. However, as noted in the main document, a different kind of plot may be preferable when the variable of interest has only a small number of categories. 
+
+The process begins the same as above:
+
+```{r}
+gss18gender$gender   <- as.factor(gss18gender$gender)
+gss18gender<-gss18gender[!(gss18gender$gender=='Dk,na'),]
+gss18gender$gender <- droplevels(gss18gender$gender)
+gss18gender<-gss18gender[!(is.na(gss18gender$year)==TRUE),] 
+levels(gss18gender$gender)
+gss18gender$id <- rownames(gss18gender)
+gss18gender_l <- gss18gender %>%
+  group_by(year, gender) %>%
+  tally()
+gss18_gender <- dcast(gss18gender_l,year~gender)
+gss18_gender$tot <- rowSums(gss18_gender[,c(2:3)])
+gss18_gender[,-1] <- lapply(gss18_gender[,-1], function(x){(x/gss18_gender$tot)*100})
+gss18_gender <- gss18_gender[,-4]
+head(gss18_gender)
+```
+
+At this point, we can skip the work of splitting a middle category and skip to final preparations. We could simplify this code a bit now that our variable just has two categories, but for the sake of consistency I adapted the code from above. 
+
+```{r}
+gndr_pal_lo <- c("#1696d2")
+gndr_pal_hi <- c("#fdbf11")
+gss_gndr_lo <- gss18_gender[,1:2]
+gss_gndr_lo <- melt(gss_gndr_lo,id="year")
+gss_gndr_lo$value <- -gss_gndr_lo$value
+gss_gndr_lo$col <- rep(gndr_pal_lo,each=(32/1))
+gss_gndr_hi <- gss18_gender[,c(1,3)]
+gss_gndr_hi <- melt(gss_gndr_hi,id="year")
+gss_gndr_hi$col <- rep(gndr_pal_hi,each=(32/1))
+mylevels_gndr <- c("Women", "Men")
+gndr_legend.pal <- c("#1696d2","#fdbf11")
+gndr_labeldf <- gss18_gender
+gndr_labeldf$Female <- gndr_labeldf$Female/2
+gndr_labeldf$Male <- gndr_labeldf$Male/2
+```
+
+Now we are ready to create the plot. I include annotations for the values. 
+
+
+```{r}
+p2 <- ggplot() +  
+  geom_bar(data = gss_gndr_lo, aes(x=year, y=value,fill=col), 
+           position="stack", stat="identity",width=.95)+ 
+  geom_bar(data = gss_gndr_hi, aes(x=year, y=value,fill=col), 
+           position="stack", stat="identity",width=.95)+
+  geom_hline(yintercept = 0, color =c("white"))+
+  scale_fill_identity(labels = mylevels_gndr, breaks=gndr_legend.pal, guide="legend")+
+  theme_classic()+
+  annotate("text", x = gndr_labeldf$year, y=-gndr_labeldf$Female, hjust = .5, 
+           label = round((gndr_labeldf$Female*2),2))+
+  annotate("text", x = gndr_labeldf$year, y=gndr_labeldf$Male, hjust = .5, 
+           label = round((gndr_labeldf$Male*2),2))+
+scale_x_continuous(breaks=c(1972:1978,1980,1982:1991,1993,seq(1994,2018,2)))+
+scale_y_continuous(breaks=seq(-50,50,10),
+                     labels=abs_percent)+
+  geom_hline(yintercept=c(-50,50),linetype="dashed",color="grey")+
+  coord_flip()+
+  labs(title = "Gender of GSS Respondents",
+       caption = "General Social Survey 1972-2018",
+       y = "",
+       x = "Year")+
+  theme(legend.title = element_blank())+
+  theme(axis.title.x = element_text(hjust=.54))+
+  theme(plot.title=element_text(size=20),
+        plot.caption=element_text(size=10),
+        axis.title.y=element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x=element_text(size=10),
+        legend.text=element_text(size=10))
+```
+
+And there we have it!
+
+```{r p2, echo=FALSE}
+plot(p2)
+```
